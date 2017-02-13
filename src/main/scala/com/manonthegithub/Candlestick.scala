@@ -58,8 +58,6 @@ object Candlestick {
         @scala.throws[Exception](classOf[Exception])
         override def onPush() = {
           val elem = grab(in)
-//          println(s"Inside: $elem")
-//          println(s"sticks $candlesticks")
           elem.element match {
             case deal: DealInfo =>
               timeDiff = elem.timestampMillis - deal.timestamp.toEpochMilli
@@ -116,8 +114,6 @@ object Candlestick {
       setHandler(out, new OutHandler {
         @scala.throws[Exception](classOf[Exception])
         override def onPull() = {
-//          println("pull")
-//          println(s"sticks $candlesticks")
           if(outputQueue.nonEmpty){
             push(out, outputQueue.dequeue())
           }else{
