@@ -29,7 +29,7 @@ class TestSuite extends WordSpec with Matchers {
                         ticker: String = Random.nextString(4),
                         price: Double = Random.nextDouble() * 150,
                         vol: Int = 1000 - Random.nextInt(300)) =
-      IncomingMessage(Instant.ofEpochSecond(second).plusMillis(milli), ticker, price, vol)
+      DealInfo(Instant.ofEpochSecond(second).plusMillis(milli), ticker, price, vol)
 
 
     "test duration" in {

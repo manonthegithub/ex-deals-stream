@@ -9,11 +9,8 @@ import akka.actor.ActorSystem
 import akka.stream._
 import akka.stream.scaladsl._
 import akka.util.ByteString
-import spray.json._
 
 import scala.concurrent.duration.FiniteDuration
-
-
 
 
 /**
@@ -42,27 +39,34 @@ object StreamConsumer extends App {
   val PortToConnect = 15555
   val PortToBind = 15556
 
-  val NumberOfSupportedTickers = 4
-
-
   import scala.concurrent.duration._
+
   val intervalTicker = Source
-    .tick(durationToNearestMinute, 1 minute, LocalDateTime.now())
+    .tick(0 seconds, 100 millis, () => System.currentTimeMillis())
     .log("LocalTime")
 
   val MessageToCandleFlow = {
     import JsonFormats.CandleStickJsonFormat
+    import scala.collection.immutable._
 
-    IncomingMessage
+    def now = System.currentTimeMillis()
+
+    DealInfo
       .framingConverterFlow
-      .groupBy(60, m => LocalDateTime.ofInstant(m.timestamp, ZoneId.systemDefault()).getMinute)
-      .groupBy(NumberOfSupportedTickers, _.ticker)
-        .map(Candlestick.createOneMin)
-        .reduce(_.merge(_))
-      .mergeSubstreams
-        .fold[ByteString](ByteString.empty)((b, c) => b ++ ByteString(c.asInstanceOf[Candlestick].toJson.compactPrint))
-        .log("Candle")
-      .concatSubstreams
+      //нужно, чтобы синхронизировать время на сервере со временем элементов
+      //и гарантированно выдавать свечи, даже если сервер перестал писать данные
+      .keepAlive(3 seconds, () => Tick)
+      .zipWith(Source.repeat[() => Long](System.currentTimeMillis).map(_ ()))(TimestampedElement(_, _))
+      .via(Candlestick.flowOfOneMin)
+      .map(_ => ByteString("123"))
+    //      .groupBy(60, m => LocalDateTime.ofInstant(m.timestamp, ZoneId.systemDefault()).getMinute)
+    //      .groupBy(NumberOfSupportedTickers, _.ticker)
+    //        .map(Candlestick.createOneMin)
+    //        .reduce(_.merge(_))
+    //      .mergeSubstreams
+    //        .fold[ByteString](ByteString.empty)((b, c) => b ++ ByteString(c.asInstanceOf[Candlestick].toJson.compactPrint))
+    //        .log("Candle")
+    //      .concatSubstreams
 
 
   }
@@ -73,9 +77,6 @@ object StreamConsumer extends App {
   //а ждут пока она восстановится,
   //в свою очередь клиенты могут отвалиться и добавляться,
   //что не влияет на серверный коннект
-
-
-
 
   val BroadcastConsumer = MessageToCandleFlow
     .toMat(BroadcastHub.sink(256))(Keep.right)
@@ -113,8 +114,6 @@ object StreamConsumer extends App {
     ).runWith(Sink.ignore)
 
 
-
-
   def durationToNearestMinute: FiniteDuration = {
     val now = LocalDateTime.now()
     val nextMinuteStart = LocalDateTime.of(
@@ -131,110 +130,7 @@ object StreamConsumer extends App {
 
 }
 
-object Candlestick {
-
-  def createOneMin(data: IncomingMessage): CandlestickOneMinute =
-    CandlestickOneMinute(
-      data.ticker,
-      data.timestamp,
-      data.timestamp,
-      data.price,
-      data.price,
-      data.price,
-      data.price,
-      data.size)
-
-}
-
-trait Candlestick {
-
-  def ticker: String
-  def openTimestamp: Instant
-  def closeTimestamp: Instant
-  def open: Double
-  def high: Double
-  def low: Double
-  def close: Double
-  def volume: Int
-
-  //время начала интервала свечи
-  final def timestamp: Instant = {
-    val millisMultiplier = (openTimestamp.toEpochMilli - startingPointForCountdownMillis) / interval.toMillis
-    val millis = startingPointForCountdownMillis + (millisMultiplier * interval.toMillis)
-    Instant.ofEpochMilli(millis)
-  }
-
-  def interval: FiniteDuration
-
-  def startingPointForCountdownMillis: Long = 0
-}
-
-case class CandlestickOneMinute(ticker: String,
-                                openTimestamp: Instant,
-                                closeTimestamp: Instant,
-                                open: Double,
-                                high: Double,
-                                low: Double,
-                                close: Double,
-                                volume: Int) extends Candlestick{
-  import scala.concurrent.duration._
-  import scala.math._
-
-  def merge(data: IncomingMessage): CandlestickOneMinute =
-    if (this.ticker == data.ticker) {
-      val distance = data.timestamp.toEpochMilli - this.timestamp.toEpochMilli
-      if (distance >= 0 && distance.millis < interval) {
-        val (newOpenTimestamp, newCloseTimestamp, newOpen, newClose) = if(data.timestamp.compareTo(openTimestamp) >= 0) {
-          (openTimestamp, data.timestamp, open, data.price)
-        } else {
-          (data.timestamp, openTimestamp, data.price, close)
-        }
-        CandlestickOneMinute(
-          ticker,
-          newOpenTimestamp,
-          newCloseTimestamp,
-          newOpen,
-          max(this.high, data.price),
-          min(this.low, data.price),
-          newClose,
-          this.volume + data.size)
-      } else {
-        this
-      }
-    } else {
-      this
-    }
-
-  def merge(other: CandlestickOneMinute) =
-    if (this.ticker == other.ticker) {
-      if (other.timestamp.toEpochMilli == this.timestamp.toEpochMilli) {
-        val (newOpenTimestamp, newOpen) =
-          if(other.openTimestamp.compareTo(openTimestamp) >= 0) (openTimestamp, open)
-          else (other.openTimestamp, other.open)
-        val (newCloseTimestamp, newClose) =
-          if(other.closeTimestamp.compareTo(closeTimestamp) <= 0) (closeTimestamp, close)
-          else (other.closeTimestamp, other.close)
-        CandlestickOneMinute(
-          ticker,
-          newOpenTimestamp,
-          newCloseTimestamp,
-          newOpen,
-          max(this.high, other.high),
-          min(this.low, other.low),
-          newClose,
-          this.volume + other.volume)
-      } else {
-        this
-      }
-    } else {
-      this
-    }
-
-
-  def interval: FiniteDuration = 1 minute
-}
-
-object IncomingMessage {
+object DealInfo {
 
   val FrameFieldLengthInBytes = 2
   val MaxFrameLength = Int.MaxValue >>> (32 - 8 * FrameFieldLengthInBytes)
@@ -250,15 +146,15 @@ object IncomingMessage {
 
   def framingConverterFlow = Framing
     .lengthField(
-      fieldLength = IncomingMessage.FrameFieldLengthInBytes,
+      fieldLength = DealInfo.FrameFieldLengthInBytes,
       fieldOffset = 0,
-      maximumFrameLength = IncomingMessage.MaxFrameLength,
+      maximumFrameLength = DealInfo.MaxFrameLength,
       byteOrder = ByteOrder.BIG_ENDIAN
     )
-    .map(IncomingMessage.fromRawBytes)
+    .map(DealInfo.fromRawBytes)
     .log("Parsed messages")
 
-  def fromRawBytes(bs: ByteString): IncomingMessage = {
+  def fromRawBytes(bs: ByteString): DealInfo = {
     val bb = bs.toByteBuffer
     val tickerLen = bb.getShort(TickerFieldLenOffset)
     val time = Instant.ofEpochMilli(bb.getLong(FrameFieldLengthInBytes))
@@ -266,7 +162,7 @@ object IncomingMessage {
     val size = bb.getInt(sizeOffset(tickerLen))
     val ticker = bs.drop(TickerOffset).take(tickerLen).decodeString(StandardCharsets.US_ASCII)
 
-    IncomingMessage(time, ticker, price, size)
+    DealInfo(time, ticker, price, size)
   }
 
   private def priceOffset(tickerLen: Int) = TickerOffset + tickerLen
@@ -275,6 +171,10 @@ object IncomingMessage {
 
 }
 
-case class IncomingMessage(timestamp: Instant, ticker: String, price: Double, size: Int)
+case class DealInfo(timestamp: Instant, ticker: String, price: Double, size: Int) extends StreamElement
+case object Tick extends StreamElement
+trait StreamElement
+
+case class TimestampedElement(element: StreamElement, timestampMillis: Long)
 
 
