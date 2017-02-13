@@ -3,15 +3,11 @@ package com.manonthegithub
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 import java.time._
-import java.time.temporal.ChronoUnit
 
 import akka.actor.ActorSystem
 import akka.stream._
 import akka.stream.scaladsl._
 import akka.util.ByteString
-
-import scala.concurrent.duration.FiniteDuration
-
 
 /**
   * Created by Kirill on 10/02/2017.
@@ -39,36 +35,22 @@ object StreamConsumer extends App {
   val PortToConnect = 15555
   val PortToBind = 15556
 
-  import scala.concurrent.duration._
-
-  val intervalTicker = Source
-    .tick(0 seconds, 100 millis, () => System.currentTimeMillis())
-    .log("LocalTime")
-
+  //конвертируем данные из битовых строк в данные по сделке и аггрегируем в свечи
   val MessageToCandleFlow = {
+    import scala.concurrent.duration._
     import JsonFormats.CandleStickJsonFormat
-    import scala.collection.immutable._
-
-    def now = System.currentTimeMillis()
-
+    import spray.json._
     DealInfo
       .framingConverterFlow
       //нужно, чтобы синхронизировать время на сервере со временем элементов
-      //и гарантированно выдавать свечи, даже если сервер перестал писать данные
+      //и гарантированно выдавать последню свечь перед паузой, даже если сервер перестал писать данные
       .keepAlive(3 seconds, () => Tick)
-      .zipWith(Source.repeat[() => Long](System.currentTimeMillis).map(_ ()))(TimestampedElement(_, _))
+      .zipWith(Source
+        .repeat[() => Long](System.currentTimeMillis)
+        .map(_ ()))(TimestampedElement(_, _))
       .via(Candlestick.flowOfOneMin)
-      .map(_ => ByteString("123"))
-    //      .groupBy(60, m => LocalDateTime.ofInstant(m.timestamp, ZoneId.systemDefault()).getMinute)
-    //      .groupBy(NumberOfSupportedTickers, _.ticker)
-    //        .map(Candlestick.createOneMin)
-    //        .reduce(_.merge(_))
-    //      .mergeSubstreams
-    //        .fold[ByteString](ByteString.empty)((b, c) => b ++ ByteString(c.asInstanceOf[Candlestick].toJson.compactPrint))
-    //        .log("Candle")
-    //      .concatSubstreams
-
-
+      .map(c => ByteString(c.toJson.compactPrint))
+      .intersperse(ByteString("\n"))
   }
 
   //Используем MergeHub и BroadcastHub для того,
@@ -115,6 +97,14 @@ object StreamConsumer extends App {
 
 }
 
+case class DealInfo(timestamp: Instant, ticker: String, price: Double, size: Int) extends StreamElement
+
+case object Tick extends StreamElement
+
+trait StreamElement
+
+case class TimestampedElement(element: StreamElement, timestampMillis: Long)
+
 object DealInfo {
 
   val FrameFieldLengthInBytes = 2
@@ -128,7 +118,7 @@ object DealInfo {
   private val TickerFieldLenOffset = FrameFieldLengthInBytes + TimestampFieldLen
   private val TickerOffset = FrameFieldLengthInBytes + TimestampFieldLen + TickerLenFieldLen
 
-
+  //бьём на фреймы, парсим каждый  фрейм
   def framingConverterFlow = Framing
     .lengthField(
       fieldLength = DealInfo.FrameFieldLengthInBytes,
@@ -156,10 +146,5 @@ object DealInfo {
 
 }
 
-case class DealInfo(timestamp: Instant, ticker: String, price: Double, size: Int) extends StreamElement
-case object Tick extends StreamElement
-trait StreamElement
-
-case class TimestampedElement(element: StreamElement, timestampMillis: Long)
 
 

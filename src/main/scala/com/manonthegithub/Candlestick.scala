@@ -25,7 +25,10 @@ object Candlestick {
       data.price,
       data.size)
 
-  def flowOfOneMin = Flow.fromGraph(new CandleAggregatorFlow).log("Candle")
+  def flowOfOneMin = Flow
+    .fromGraph(
+      new CandleAggregatorFlow(Candlestick.createOneMin, CandlestickOneMinute.Interval, CandlestickOneMinute.CountdownStartMilli))
+    .log("Candle")
 
   def intervalStartForTimestamp(timestamp: Instant, interval: FiniteDuration, startOfCountdown: Long): Instant = {
     val millisMultiplier = (timestamp.toEpochMilli - startOfCountdown) / interval.toMillis
@@ -33,22 +36,19 @@ object Candlestick {
     Instant.ofEpochMilli(millis)
   }
 
-
-  class CandleAggregatorFlow extends GraphStage[FlowShape[TimestampedElement, CandlestickOneMinute]]{
+  class CandleAggregatorFlow(factory: (DealInfo) => Candlestick, interval: FiniteDuration, countdownStartMillis: Long)
+    extends GraphStage[FlowShape[TimestampedElement, Candlestick]]{
 
     val in: Inlet[TimestampedElement] = Inlet("InDeals")
-    val out: Outlet[CandlestickOneMinute] = Outlet("OutCandles")
+    val out: Outlet[Candlestick] = Outlet("OutCandles")
 
     @scala.throws[Exception](classOf[Exception])
     override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
-      private val interval = CandlestickOneMinute.Interval
-      private val start = CandlestickOneMinute.CountdownStartMilli
-
       private var timeDiff: Long = 0
 
-      private val candlesticks = mutable.Map.empty[String, CandlestickOneMinute]
-      private val outputQueue = mutable.Queue.empty[CandlestickOneMinute]
+      private val candlesticks = mutable.Map.empty[String, Candlestick]
+      private val outputQueue = mutable.Queue.empty[Candlestick]
 
       override def preStart(): Unit = {
         pull(in)
@@ -61,8 +61,6 @@ object Candlestick {
           elem.element match {
             case deal: DealInfo =>
               timeDiff = elem.timestampMillis - deal.timestamp.toEpochMilli
-
-
               val currentCandle = candlesticks.get(deal.ticker)
               currentCandle match {
                 case Some(c) =>
@@ -70,40 +68,24 @@ object Candlestick {
                     candlesticks.update(c.ticker, c.merge(deal))
                     pull(in)
                   } else {
-                    candlesticks foreach (e => outputQueue.enqueue(e._2))
-                    candlesticks.clear()
-                    if(outputQueue.nonEmpty) {
-                      push(out, outputQueue.dequeue())
-                    }else{
-                      pull(in)
-                    }
+                    enqueueCandlesForPush
+                    pushIfCanOtherwisePull
                   }
                 case None =>
-                  if (candlesticks.nonEmpty && dealInterval(deal.timestamp) != candlesticks.head._2.timestamp) {
-                    candlesticks foreach (e => outputQueue.enqueue(e._2))
-                    candlesticks.clear()
-
+                  if (needTriggerPush(deal.timestamp)) {
+                    enqueueCandlesForPush
                     candlesticks.update(deal.ticker, Candlestick.createOneMin(deal))
-
-                    if(outputQueue.nonEmpty) {
-                      push(out, outputQueue.dequeue())
-                    }else{
-                      pull(in)
-                    }
+                    pushIfCanOtherwisePull
                   }else{
                     candlesticks.update(deal.ticker, Candlestick.createOneMin(deal))
                     pull(in)
                   }
               }
             case Tick =>
-              if (candlesticks.nonEmpty && dealInterval(Instant.ofEpochMilli(elem.timestampMillis - timeDiff)) != candlesticks.head._2.timestamp) {
-                candlesticks foreach (e => outputQueue.enqueue(e._2))
-                candlesticks.clear()
-                if(outputQueue.nonEmpty) {
-                  push(out, outputQueue.dequeue())
-                }else{
-                  pull(in)
-                }
+              val localTimeToServerTime = Instant.ofEpochMilli(elem.timestampMillis - timeDiff)
+              if (needTriggerPush(localTimeToServerTime)) {
+                enqueueCandlesForPush
+                pushIfCanOtherwisePull
               }else{
                 pull(in)
               }
@@ -114,20 +96,30 @@ object Candlestick {
       setHandler(out, new OutHandler {
         @scala.throws[Exception](classOf[Exception])
         override def onPull() = {
-          if(outputQueue.nonEmpty){
-            push(out, outputQueue.dequeue())
-          }else{
-            if(!hasBeenPulled(in)){
-              pull(in)
-            }
-          }
+          pushIfCanOtherwisePull
         }
       })
 
-      def dealInterval(ts: Instant) = Candlestick.intervalStartForTimestamp(ts, interval, start)
+      private def pushIfCanOtherwisePull =
+        if(outputQueue.nonEmpty){
+          push(out, outputQueue.dequeue())
+        }else{
+          if(!hasBeenPulled(in)){
+            pull(in)
+          }
+        }
+
+      private def needTriggerPush(timestamp: Instant): Boolean = candlesticks.nonEmpty && dealInterval(timestamp) != candlesticks.head._2.timestamp
+
+      private def enqueueCandlesForPush = {
+        candlesticks foreach (e => outputQueue.enqueue(e._2))
+        candlesticks.clear()
+      }
+
+      private def dealInterval(ts: Instant) = Candlestick.intervalStartForTimestamp(ts, interval, countdownStartMillis)
     }
 
-    override def shape: FlowShape[TimestampedElement, CandlestickOneMinute] = FlowShape(in, out)
+    override def shape: FlowShape[TimestampedElement, Candlestick] = FlowShape(in, out)
   }
 
 }
@@ -151,6 +143,8 @@ trait Candlestick {
   def close: Double
 
   def volume: Int
+
+  def merge(data: DealInfo): Candlestick
 
   //время начала интервала свечи
   final def timestamp: Instant = intervalStartForTimestamp(openTimestamp, interval, startingPointForCountdownMillis)
