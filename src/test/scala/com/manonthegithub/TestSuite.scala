@@ -31,12 +31,6 @@ class TestSuite extends WordSpec with Matchers {
                         vol: Int = 1000 - Random.nextInt(300)) =
       DealInfo(Instant.ofEpochSecond(second).plusMillis(milli), ticker, price, vol)
 
-
-    "test duration" in {
-      println(LocalDateTime.now())
-      println(StreamConsumer.durationToNearestMinute)
-    }
-
     "init right candle" in {
       val data = generateMessage()
       val initial = Candlestick.createOneMin(data)

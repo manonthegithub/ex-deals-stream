@@ -113,21 +113,6 @@ object StreamConsumer extends App {
       .runWith(Sink.ignore)
     ).runWith(Sink.ignore)
 
-
-  def durationToNearestMinute: FiniteDuration = {
-    val now = LocalDateTime.now()
-    val nextMinuteStart = LocalDateTime.of(
-      now.getYear,
-      now.getMonth,
-      now.getDayOfMonth,
-      now.getHour,
-      now.getMinute + 1,
-      0,
-      0)
-
-    (now.until(nextMinuteStart, ChronoUnit.SECONDS) + 1) seconds
-  }
-
 }
 
 object DealInfo {
