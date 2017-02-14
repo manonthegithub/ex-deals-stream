@@ -49,7 +49,7 @@ object Candlestick {
     @scala.throws[Exception](classOf[Exception])
     override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new TimerGraphStageLogic(shape) {
 
-      private case object DequeAfterIntervalEnds
+      private case class DequeAfterIntervalEnds(timestamp: Instant)
 
       private var buffer = immutable.Queue.empty[Candlestick]
 
@@ -64,7 +64,7 @@ object Candlestick {
           val sameTimestampWithPrevious = if(buffer.nonEmpty) elem.timestamp == buffer.last.timestamp else false
           buffer :+= elem
           if(!sameTimestampWithPrevious){
-            scheduleOnce(DequeAfterIntervalEnds, elem.interval * sizeIntervals)
+            scheduleOnce(DequeAfterIntervalEnds(elem.timestamp), elem.interval * sizeIntervals)
           }
           pull(in)
         }
@@ -74,7 +74,6 @@ object Candlestick {
         @scala.throws[Exception](classOf[Exception])
         override def onPull(): Unit = {
           val batch = buffer :+ EndOfBatch
-          batch foreach(e => println(s"Buffer " + e))
           push(out, batch)
         }
       })
@@ -85,9 +84,10 @@ object Candlestick {
       }
 
       override def onTimer(timerKey: Any): Unit = timerKey match {
-        case DequeAfterIntervalEnds => if(buffer.nonEmpty){
-          dequeFirstTimestampCandles()
-        }
+        case DequeAfterIntervalEnds(_) =>
+          if(buffer.nonEmpty){
+            dequeFirstTimestampCandles()
+          }
         case _ =>
       }
 

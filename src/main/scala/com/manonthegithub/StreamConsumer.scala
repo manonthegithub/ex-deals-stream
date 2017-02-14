@@ -76,6 +76,8 @@ object StreamConsumer extends App {
 
   val BufferRawSource = broadcastBufferSource
     .log("TenBatch")
+    .dropWhile(_ != EndOfBatch)
+    .drop(1)
     .takeWhile(_.isInstanceOf[Candlestick])
     .map(_.asInstanceOf[Candlestick])
     .map(c => ByteString(c.toJson.compactPrint))
@@ -139,7 +141,7 @@ object DealInfo {
       byteOrder = ByteOrder.BIG_ENDIAN
     )
     .map(DealInfo.fromRawBytes)
-    //.log("Parsed messages")
+    .log("Parsed messages")
 
   def fromRawBytes(bs: ByteString): DealInfo = {
     val bb = bs.toByteBuffer
