@@ -107,37 +107,7 @@ object StreamConsumer extends App {
     .via(_)
     .runWith(Sink.ignore)
   ).runWith(Sink.ignore)
-
-  import scala.collection.immutable._
-  def batchCandles(): Function[Candlestick, Iterable[StreamElement]] = {
-    import scala.collection.immutable.Queue
-    val MaxBufferIntervals = 10
-    var buffer = Queue.empty[Candlestick]
-    var count = 0
-
-    def aggregate(c: Candlestick) = {
-      if (buffer.isEmpty || buffer.last.timestamp != c.timestamp) {
-        count += 1
-      }
-      buffer :+= c
-      val buf = if (count < MaxBufferIntervals) {
-        buffer
-      } else {
-        var head: Candlestick = ???
-        do {
-          head = buffer.head
-          buffer = buffer.tail
-        } while (buffer.head.timestamp == head.timestamp)
-        count -= 1
-
-        buffer
-      }
-      buf :+ EndOfBatch
-    }
-
-    aggregate
-  }
-
+  
 }
 
 case class DealInfo(timestamp: Instant, ticker: String, price: Double, size: Int) extends StreamElement
