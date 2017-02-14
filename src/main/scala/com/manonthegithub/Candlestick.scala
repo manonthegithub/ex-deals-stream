@@ -124,7 +124,7 @@ object Candlestick {
 
 }
 
-trait Candlestick {
+trait Candlestick extends StreamElement{
 
   import Candlestick._
 

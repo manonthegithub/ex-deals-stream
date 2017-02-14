@@ -35,20 +35,27 @@ object StreamConsumer extends App {
   val PortToConnect = 15555
   val PortToBind = 15556
 
+  val TenMinBufferBroadcastSink = Flow[Candlestick]
+    .statefulMapConcat[StreamElement](batchCandles)
+    .toMat(BroadcastHub.sink(256))(Keep.right)
+
+  import JsonFormats.CandleStickJsonFormat
+  import spray.json._
+
   //конвертируем данные из битовых строк в данные по сделке и аггрегируем в свечи
   val MessageToCandleFlow = {
     import scala.concurrent.duration._
-    import JsonFormats.CandleStickJsonFormat
-    import spray.json._
+
     DealInfo
       .framingConverterFlow
       //нужно, чтобы синхронизировать время на сервере со временем элементов
       //и гарантированно выдавать последню свечь перед паузой, даже если сервер перестал писать данные
-      .keepAlive(3 seconds, () => Tick)
+      .keepAlive(1 seconds, () => Tick)
       .zipWith(Source
         .repeat[() => Long](System.currentTimeMillis)
         .map(_ ()))(TimestampedElement(_, _))
       .via(Candlestick.flowOfOneMin)
+      .alsoToMat(TenMinBufferBroadcastSink)(Keep.right)
       .map(c => ByteString(c.toJson.compactPrint))
       .intersperse(ByteString("\n"))
   }
@@ -61,13 +68,20 @@ object StreamConsumer extends App {
   //что не влияет на серверный коннект
 
   val BroadcastConsumer = MessageToCandleFlow
-    .toMat(BroadcastHub.sink(256))(Keep.right)
+    .toMat(BroadcastHub.sink(256))(Keep.both)
 
   val ConnectedServerClientGraph = MergeHub
     .source[ByteString](perProducerBufferSize = 16)
     .toMat(BroadcastConsumer)(Keep.both)
 
-  val (mergeSink, broadcastSource) = ConnectedServerClientGraph.run()
+  val (mergeSink,(broadcastBufferSource, broadcastSource)) = ConnectedServerClientGraph.run()
+
+  val BufferRawSource = broadcastBufferSource
+    .takeWhile(_.isInstanceOf[Candlestick])
+    .map(_.asInstanceOf[Candlestick])
+    .log("TenBatch")
+    .map(c => ByteString(c.toJson.compactPrint))
+    .intersperse(ByteString("\n"))
 
   // Работа серверными соединениями
   Source
@@ -83,23 +97,54 @@ object StreamConsumer extends App {
       .run()
   ).runWith(Sink.ignore)
 
-
   // Работа с клиентскими соединениями
   Tcp()
     .bind(Host, PortToBind)
     .map(_.flow)
     // используем бродкаст для передачи сообщений на клиенты
-    .map(broadcastSource
-      .log("Sent to client")
-      .via(_)
-      .runWith(Sink.ignore)
-    ).runWith(Sink.ignore)
+    .map(broadcastSource.prepend(BufferRawSource)
+    .log("Sent to client")
+    .via(_)
+    .runWith(Sink.ignore)
+  ).runWith(Sink.ignore)
+
+  import scala.collection.immutable._
+  def batchCandles(): Function[Candlestick, Iterable[StreamElement]] = {
+    import scala.collection.immutable.Queue
+    val MaxBufferIntervals = 10
+    var buffer = Queue.empty[Candlestick]
+    var count = 0
+
+    def aggregate(c: Candlestick) = {
+      if (buffer.isEmpty || buffer.last.timestamp != c.timestamp) {
+        count += 1
+      }
+      buffer :+= c
+      val buf = if (count < MaxBufferIntervals) {
+        buffer
+      } else {
+        var head: Candlestick = ???
+        do {
+          head = buffer.head
+          buffer = buffer.tail
+        } while (buffer.head.timestamp == head.timestamp)
+        count -= 1
+
+        buffer
+      }
+      buf :+ EndOfBatch
+    }
+
+    aggregate
+  }
 
 }
 
 case class DealInfo(timestamp: Instant, ticker: String, price: Double, size: Int) extends StreamElement
 
 case object Tick extends StreamElement
+
+case object EndOfBatch extends StreamElement
 
 trait StreamElement
 

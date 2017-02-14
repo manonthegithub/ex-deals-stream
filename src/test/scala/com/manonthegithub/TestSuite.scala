@@ -2,14 +2,37 @@ package com.manonthegithub
 
 import java.time.{LocalDateTime, Instant}
 
-import org.scalatest.{Matchers, WordSpec}
+import akka.actor.ActorSystem
+import akka.stream.ActorMaterializer
+import akka.stream.scaladsl.{Sink, Source, Flow}
+import akka.stream.testkit.scaladsl.TestSink
+import akka.testkit.{TestProbe, TestKit}
+import org.scalatest.{WordSpecLike, Matchers}
 
 import scala.util.Random
 
 /**
   * Created by Kirill on 12/02/2017.
   */
-class TestSuite extends WordSpec with Matchers {
+class TestSuite extends TestKit(ActorSystem("tester")) with WordSpecLike with Matchers {
+
+  implicit val sys = system
+  implicit val mat = ActorMaterializer()
+
+
+  "TenMinFlow" should {
+
+    "work" in {
+      Source
+        .repeat(Candlestick.createOneMin(DealInfo(Instant.now(),"TC",100.5,100)))
+        .statefulMapConcat[StreamElement](StreamConsumer.batchCandles)
+        .runWith(TestSink.probe)
+        .request(1)
+        .expectNext()
+    }
+
+
+  }
 
 
   "Candles" should {
