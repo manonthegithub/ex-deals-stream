@@ -25,7 +25,7 @@ class TestSuite extends TestKit(ActorSystem("tester")) with WordSpecLike with Ma
     "work" in {
       Source
         .repeat(Candlestick.createOneMin(DealInfo(Instant.now(),"TC",100.5,100)))
-        .statefulMapConcat[StreamElement](StreamConsumer.batchCandles)
+        .via(Candlestick.tenMinBufferOfOneMin)
         .runWith(TestSink.probe)
         .request(1)
         .expectNext()

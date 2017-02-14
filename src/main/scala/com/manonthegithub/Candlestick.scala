@@ -5,10 +5,11 @@ package com.manonthegithub
 
 import java.time.Instant
 
+import akka.NotUsed
 import akka.stream.{Attributes, FlowShape, Inlet, Outlet}
 import akka.stream.scaladsl.Flow
-import akka.stream.stage.{GraphStage, GraphStageLogic, InHandler, OutHandler}
-
+import akka.stream.stage._
+import scala.collection.immutable
 import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration
 
@@ -25,15 +26,75 @@ object Candlestick {
       data.price,
       data.size)
 
-  def flowOfOneMin = Flow
-    .fromGraph(
-      new CandleAggregatorFlow(Candlestick.createOneMin, CandlestickOneMinute.Interval, CandlestickOneMinute.CountdownStartMilli))
+  def flowOfOneMin: Flow[TimestampedElement, Candlestick, NotUsed] = Flow
+    .fromGraph(new CandleAggregatorFlow(Candlestick.createOneMin, CandlestickOneMinute.Interval, CandlestickOneMinute.CountdownStartMilli))
     .log("Candle")
+
+  def tenMinBufferOfOneMin: Flow[Candlestick, StreamElement, NotUsed] = Flow
+    .fromGraph(new CandlesBuffer(10))
+    .mapConcat[StreamElement](b => b)
 
   def intervalStartForTimestamp(timestamp: Instant, interval: FiniteDuration, startOfCountdown: Long): Instant = {
     val millisMultiplier = (timestamp.toEpochMilli - startOfCountdown) / interval.toMillis
     val millis = startOfCountdown + (millisMultiplier * interval.toMillis)
     Instant.ofEpochMilli(millis)
+  }
+
+
+  class CandlesBuffer(sizeIntervals: Int) extends GraphStage[FlowShape[Candlestick, immutable.Iterable[StreamElement]]]{
+
+    val in = Inlet[Candlestick]("InCandles")
+    val out = Outlet[immutable.Iterable[StreamElement]]("OutBatches")
+
+    @scala.throws[Exception](classOf[Exception])
+    override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new TimerGraphStageLogic(shape) {
+
+      private case object DequeAfterIntervalEnds
+
+      private var buffer = immutable.Queue.empty[Candlestick]
+
+      override def preStart(): Unit = {
+        pull(in)
+      }
+
+      setHandler(in, new InHandler {
+        @scala.throws[Exception](classOf[Exception])
+        override def onPush(): Unit = {
+          val elem  = grab(in)
+          val sameTimestampWithPrevious = if(buffer.nonEmpty) elem.timestamp == buffer.last.timestamp else false
+          buffer :+= elem
+          if(!sameTimestampWithPrevious){
+            scheduleOnce(DequeAfterIntervalEnds, elem.interval * sizeIntervals)
+          }
+          pull(in)
+        }
+      })
+
+      setHandler(out, new OutHandler {
+        @scala.throws[Exception](classOf[Exception])
+        override def onPull(): Unit = {
+          val batch = buffer :+ EndOfBatch
+          batch foreach(e => println(s"Buffer " + e))
+          push(out, batch)
+        }
+      })
+
+      private def dequeFirstTimestampCandles(): Unit = {
+        val timestampToDeque = buffer.head.timestamp
+        buffer = buffer.dropWhile(_.timestamp == timestampToDeque)
+      }
+
+      override def onTimer(timerKey: Any): Unit = timerKey match {
+        case DequeAfterIntervalEnds => if(buffer.nonEmpty){
+          dequeFirstTimestampCandles()
+        }
+        case _ =>
+      }
+
+    }
+
+    override def shape: FlowShape[Candlestick, immutable.Iterable[StreamElement]] = FlowShape(in, out)
+
   }
 
   class CandleAggregatorFlow(factory: (DealInfo) => Candlestick, interval: FiniteDuration, countdownStartMillis: Long)
