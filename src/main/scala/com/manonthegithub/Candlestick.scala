@@ -1,6 +1,3 @@
-/*
- * Copyright 2017 Infotecs. All rights reserved.
- */
 package com.manonthegithub
 
 import java.time.Instant
@@ -40,8 +37,12 @@ object Candlestick {
     Instant.ofEpochMilli(millis)
   }
 
-
-  class CandlesBuffer(sizeIntervals: Int) extends GraphStage[FlowShape[Candlestick, immutable.Iterable[StreamElement]]]{
+  /**
+    * Буфер хранит несколько последних свечей
+    *
+    * @param sizeIntervals количество свечей, которые нужно хранить
+    */
+  class CandlesBuffer(sizeIntervals: Int) extends GraphStage[FlowShape[Candlestick, immutable.Iterable[StreamElement]]] {
 
     val in = Inlet[Candlestick]("InCandles")
     val out = Outlet[immutable.Iterable[StreamElement]]("OutBatches")
@@ -60,10 +61,12 @@ object Candlestick {
       setHandler(in, new InHandler {
         @scala.throws[Exception](classOf[Exception])
         override def onPush(): Unit = {
-          val elem  = grab(in)
-          val sameTimestampWithPrevious = if(buffer.nonEmpty) elem.timestamp == buffer.last.timestamp else false
+          val elem = grab(in)
+          val sameTimestampWithPrevious = if (buffer.nonEmpty) elem.timestamp == buffer.last.timestamp else false
           buffer :+= elem
-          if(!sameTimestampWithPrevious){
+          // при удалении полагаться на поток свечей нельзя,
+          // так как он может прерываться в случае потери соединения с сервером
+          if (!sameTimestampWithPrevious) {
             scheduleOnce(DequeAfterIntervalEnds(elem.timestamp), elem.interval * sizeIntervals)
           }
           pull(in)
@@ -85,7 +88,7 @@ object Candlestick {
 
       override def onTimer(timerKey: Any): Unit = timerKey match {
         case DequeAfterIntervalEnds(_) =>
-          if(buffer.nonEmpty){
+          if (buffer.nonEmpty) {
             dequeFirstTimestampCandles()
           }
         case _ =>
@@ -97,8 +100,15 @@ object Candlestick {
 
   }
 
+  /**
+    * Слушает с события с сервера и конвретирует их в свечи
+    *
+    * @param factory              фабрика генерации свечи из события
+    * @param interval             период свечей
+    * @param countdownStartMillis точка отсчёта для периодов свечей
+    */
   class CandleAggregatorFlow(factory: (DealInfo) => Candlestick, interval: FiniteDuration, countdownStartMillis: Long)
-    extends GraphStage[FlowShape[TimestampedElement, Candlestick]]{
+    extends GraphStage[FlowShape[TimestampedElement, Candlestick]] {
 
     val in: Inlet[TimestampedElement] = Inlet("InDeals")
     val out: Outlet[Candlestick] = Outlet("OutCandles")
@@ -137,7 +147,7 @@ object Candlestick {
                     enqueueCandlesForPush
                     candlesticks.update(deal.ticker, Candlestick.createOneMin(deal))
                     pushIfCanOtherwisePull
-                  }else{
+                  } else {
                     candlesticks.update(deal.ticker, Candlestick.createOneMin(deal))
                     pull(in)
                   }
@@ -147,7 +157,7 @@ object Candlestick {
               if (needTriggerPush(localTimeToServerTime)) {
                 enqueueCandlesForPush
                 pushIfCanOtherwisePull
-              }else{
+              } else {
                 pull(in)
               }
           }
@@ -162,10 +172,10 @@ object Candlestick {
       })
 
       private def pushIfCanOtherwisePull =
-        if(outputQueue.nonEmpty){
+        if (outputQueue.nonEmpty) {
           push(out, outputQueue.dequeue())
-        }else{
-          if(!hasBeenPulled(in)){
+        } else {
+          if (!hasBeenPulled(in)) {
             pull(in)
           }
         }
@@ -185,7 +195,7 @@ object Candlestick {
 
 }
 
-trait Candlestick extends StreamElement{
+trait Candlestick extends StreamElement {
 
   import Candlestick._
 
@@ -223,6 +233,9 @@ object CandlestickOneMinute {
   val CountdownStartMilli: Long = 0
 }
 
+/**
+  * Чтобы отличать свечи с разным периодом объявляем отдельный тип для каждого
+  */
 case class CandlestickOneMinute(ticker: String,
                                 openTimestamp: Instant,
                                 closeTimestamp: Instant,

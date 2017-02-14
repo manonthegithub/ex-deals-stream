@@ -35,29 +35,6 @@ object StreamConsumer extends App {
   val PortToConnect = 15555
   val PortToBind = 15556
 
-  val TenMinBufferBroadcastSink = Candlestick
-    .tenMinBufferOfOneMin
-    .toMat(BroadcastHub.sink(1))(Keep.right)
-
-  import JsonFormats.CandleStickJsonFormat
-  import spray.json._
-
-  //конвертируем данные из битовых строк в данные по сделке и аггрегируем в свечи
-  val MessageToCandleFlow = {
-    import scala.concurrent.duration._
-
-    DealInfo
-      .framingConverterFlow
-      //нужно, чтобы синхронизировать время на сервере со временем элементов
-      //и гарантированно выдавать последню свечь перед паузой, даже если сервер перестал писать данные
-      .keepAlive(3 seconds, () => Tick)
-      .map(TimestampedElement(_, System.currentTimeMillis()))
-      .via(Candlestick.flowOfOneMin)
-      .alsoToMat(TenMinBufferBroadcastSink)(Keep.right)
-      .map(c => ByteString(c.toJson.compactPrint))
-      .intersperse(ByteString("\n"))
-  }
-
   //Используем MergeHub и BroadcastHub для того,
   //чтобы отвязать серверные коннекты от клиентских,
   //т.е. если пропадает связь с сервером, то клиенты не отваливаются,
@@ -65,15 +42,53 @@ object StreamConsumer extends App {
   //в свою очередь клиенты могут отвалиться и добавляться,
   //что не влияет на серверный коннект
 
-  val BroadcastConsumer = MessageToCandleFlow
-    .toMat(BroadcastHub.sink(1))(Keep.both)
+  //конвертируем данные из битовых строк в данные по сделке, аггрегируем в свечи и бродкастим на клиенты
+  import JsonFormats.CandleStickJsonFormat
+  import spray.json._
 
+  val RawDataToCandlesBradcastSink = {
+    import scala.concurrent.duration._
+    //парсинг сырых данных
+    DealInfo
+      .framingConverterFlow
+      //нужно, чтобы синхронизировать время на сервере со временем элементов
+      //и гарантированно выдавать последню свечь перед паузой, даже если сервер перестал писать данные
+      .keepAlive(3 seconds, () => Tick)
+      .map(TimestampedElement(_, System.currentTimeMillis()))
+      //аггрегируем в свечи
+      .via(Candlestick.flowOfOneMin)
+      //отдельно бродкастим свечи за последние 10 минут
+      .alsoToMat(Candlestick
+        .tenMinBufferOfOneMin
+        .toMat(BroadcastHub.sink(1))(Keep.right))(Keep.right)
+      //конвертируем в байты и бродкастим
+      .map(c => ByteString(c.toJson.compactPrint))
+      .intersperse(ByteString("\n"))
+      .toMat(BroadcastHub.sink(1))(Keep.both)
+  }
+
+  //соединяем бродкастинг на клиенты с приёмом пакетов из серверных соединений
   val ConnectedServerClientGraph = MergeHub
     .source[ByteString](perProducerBufferSize = 1)
-    .toMat(BroadcastConsumer)(Keep.both)
+    .toMat(RawDataToCandlesBradcastSink)(Keep.both)
 
-  val (mergeSink,(broadcastBufferSource, broadcastSource)) = ConnectedServerClientGraph.run()
+  val (mergeSink, (broadcastBufferSource, broadcastSource)) = ConnectedServerClientGraph.run()
 
+  // Работа серверными соединениями
+  Source
+    .repeat(Tcp().outgoingConnection(Host, PortToConnect))
+    // одно одновременное подключение
+    .mapAsync(1)(
+      Source
+        .single(ByteString.empty)
+        .via(_)
+        .watchTermination()(Keep.right)
+        // использовать мёрдж хаб для коннектов к серверу с данными
+        .toMat(mergeSink)(Keep.left)
+        .run()
+    ).runWith(Sink.ignore)
+
+  //источник пачек свечей за последние 10 минут
   val BufferRawSource = broadcastBufferSource
     .log("TenBatch")
     .dropWhile(_ != EndOfBatch)
@@ -83,33 +98,21 @@ object StreamConsumer extends App {
     .map(c => ByteString(c.toJson.compactPrint))
     .intersperse(ByteString("\n"))
 
-  // Работа серверными соединениями
-  Source
-    .repeat(Tcp().outgoingConnection(Host, PortToConnect))
-    // одно одновременное подключение
-    .mapAsync(1)(
-    Source
-      .single(ByteString.empty)
-      .via(_)
-      .watchTermination()(Keep.right)
-      // использовать мёрдж хаб для коннектов к серверу с данными
-      .toMat(mergeSink)(Keep.left)
-      .run()
-  ).runWith(Sink.ignore)
-
   // Работа с клиентскими соединениями
   Tcp()
     .bind(Host, PortToBind)
     .map(_.flow)
-    // используем бродкаст для передачи сообщений на клиенты
-    .map(broadcastSource.prepend(BufferRawSource)
-    .via(_)
-    .runWith(Sink.ignore)
-  ).runWith(Sink.ignore)
-  
+    // используем бродкаст для передачи свечей на клиенты,
+    // сначала за последние 10 минут потом остальные
+    .map(broadcastSource
+      .prepend(BufferRawSource)
+      .via(_)
+      .runWith(Sink.ignore)
+    ).runWith(Sink.ignore)
+
 }
 
-case class DealInfo(timestamp: Instant, ticker: String, price: Double, size: Int) extends StreamElement
+case class TimestampedElement(element: StreamElement, timestampMillis: Long)
 
 case object Tick extends StreamElement
 
@@ -117,7 +120,8 @@ case object EndOfBatch extends StreamElement
 
 trait StreamElement
 
-case class TimestampedElement(element: StreamElement, timestampMillis: Long)
+//объектное представление сообщений с сервера
+case class DealInfo(timestamp: Instant, ticker: String, price: Double, size: Int) extends StreamElement
 
 object DealInfo {
 
