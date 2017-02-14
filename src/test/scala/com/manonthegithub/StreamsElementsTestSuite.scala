@@ -9,12 +9,10 @@ import akka.stream.testkit.scaladsl.TestSink
 import akka.testkit.TestKit
 import org.scalatest.{WordSpecLike, Matchers}
 
-import scala.util.Random
-
 /**
   * Created by Kirill on 12/02/2017.
   */
-class TestSuite extends TestKit(ActorSystem("tester")) with WordSpecLike with Matchers {
+class StreamsElementsTestSuite extends TestKit(ActorSystem("tester")) with WordSpecLike with Matchers {
 
   implicit val sys = system
   implicit val mat = ActorMaterializer()
