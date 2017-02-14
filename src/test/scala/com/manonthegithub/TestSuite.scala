@@ -1,12 +1,12 @@
 package com.manonthegithub
 
-import java.time.{LocalDateTime, Instant}
+import java.time.Instant
 
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.{Sink, Source, Flow}
+import akka.stream.scaladsl.Source
 import akka.stream.testkit.scaladsl.TestSink
-import akka.testkit.{TestProbe, TestKit}
+import akka.testkit.TestKit
 import org.scalatest.{WordSpecLike, Matchers}
 
 import scala.util.Random
@@ -19,25 +19,21 @@ class TestSuite extends TestKit(ActorSystem("tester")) with WordSpecLike with Ma
   implicit val sys = system
   implicit val mat = ActorMaterializer()
 
-
   "TenMinFlow" should {
 
-    "work" in {
+    "return element" in {
       Source
-        .repeat(Candlestick.createOneMin(DealInfo(Instant.now(),"TC",100.5,100)))
+        .repeat(Candlestick.createOneMin(DealInfo(Instant.now(), "TC", 100.5, 100)))
         .via(Candlestick.tenMinBufferOfOneMin)
         .runWith(TestSink.probe)
         .request(1)
         .expectNext()
     }
 
-
   }
-
 
   "Candles" should {
     import scala.math._
-
 
     val DefaultInitialMessageSecond: Long = 123
     val DefaultInitialMessageMilli: Long = 123
@@ -117,7 +113,7 @@ class TestSuite extends TestKit(ActorSystem("tester")) with WordSpecLike with Ma
 
       val afterMerge = initial.merge(secondCandle)
       afterMerge should matchPattern {
-        case CandlestickOneMinute(data.ticker, DefaultInstant,data2.timestamp, data.price, ExpectedHigh, ExpectedLow, data2.price, ExpectedMergeVol) =>
+        case CandlestickOneMinute(data.ticker, DefaultInstant, data2.timestamp, data.price, ExpectedHigh, ExpectedLow, data2.price, ExpectedMergeVol) =>
       }
     }
 
@@ -189,7 +185,7 @@ class TestSuite extends TestKit(ActorSystem("tester")) with WordSpecLike with Ma
 
       val afterMerge = initial.merge(data2)
       afterMerge should matchPattern {
-        case CandlestickOneMinute(data.ticker, DefaultInstant,data2.timestamp, data.price, ExpectedHigh, ExpectedLow, data2.price, ExpectedMergeVol) =>
+        case CandlestickOneMinute(data.ticker, DefaultInstant, data2.timestamp, data.price, ExpectedHigh, ExpectedLow, data2.price, ExpectedMergeVol) =>
       }
     }
 
