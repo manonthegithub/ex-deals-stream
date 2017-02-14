@@ -51,7 +51,7 @@ object StreamConsumer extends App {
     //парсинг сырых данных
     DealInfo
       .framingConverterFlow
-      //нужно, чтобы синхронизировать время на сервере со временем элементов
+      //нужно, чтобы синхронизировать время на сервере передающим данные c локальным временем
       //и гарантированно выдавать последню свечь перед паузой, даже если сервер перестал писать данные
       .keepAlive(3 seconds, () => Tick)
       .map(TimestampedElement(_, System.currentTimeMillis()))
