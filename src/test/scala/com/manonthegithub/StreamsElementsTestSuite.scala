@@ -7,7 +7,9 @@ import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.Source
 import akka.stream.testkit.scaladsl.TestSink
 import akka.testkit.TestKit
-import org.scalatest.{WordSpecLike, Matchers}
+import org.scalatest.{Matchers, WordSpecLike}
+
+import scala.util.Random
 
 /**
   * Created by Kirill on 12/02/2017.
@@ -44,6 +46,25 @@ class StreamsElementsTestSuite extends TestKit(ActorSystem("tester")) with WordS
 
   "CandlesticksFlow" should {
     import scala.collection.immutable._
+
+    def randomWithTs(timestampMilli: Long): TimestampedElement = {
+      if(Random.nextBoolean()){
+        TimestampedElement(generateMessage(timestampMilli / 1000, timestampMilli % 1000, Random.nextPrintableChar().toString), timestampMilli)
+      }else{
+        TimestampedElement(Tick, timestampMilli)
+      }
+    }
+
+    "work with lots of data" in {
+      val seq = Source
+        .repeat[(Long) => TimestampedElement](randomWithTs)
+        .zipWith(Source.repeat[() => Long](System.currentTimeMillis).map(_()))((a ,b) => a(b))
+        .via(Candlestick.flowOfOneMin)
+        .runWith(TestSink.probe)
+        .request(100)
+        .receiveWithin(CandlestickOneMinute.Interval)
+      seq.size should be <= (126 - 33 + 1)
+    }
 
     "push candles after tick with other interval and distinguish them" in {
 

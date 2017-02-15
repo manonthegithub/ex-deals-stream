@@ -48,12 +48,12 @@ object StreamConsumer extends App {
   //в свою очередь клиенты могут отвалиться и добавляться,
   //что не влияет на серверный коннект
 
-  //конвертируем данные из битовых строк в данные по сделке, аггрегируем в свечи и бродкастим на клиенты
   import JsonFormats.CandleStickJsonFormat
   import spray.json._
   import scala.concurrent.duration._
 
-  val RawDataToCandlesBroadcastSink = DealInfo
+  //конвертируем данных из битовых строк в данные по сделке, далее, аггрегируем в свечи
+  val rawDataToCandlesBroadcastSink = DealInfo
     //парсинг сырых данных
     .framingConverterFlow
     //нужно, чтобы синхронизировать время на сервере передающим данные c локальным временем
@@ -62,19 +62,21 @@ object StreamConsumer extends App {
     .map(TimestampedElement(_, System.currentTimeMillis()))
     //аггрегируем в свечи
     .via(Candlestick.flowOfOneMin)
-    //отдельно бродкастим свечи за последние 10 минут
-    .alsoToMat(Candlestick
-      .tenMinBufferOfOneMin
-      .toMat(BroadcastHub.sink(1))(Keep.right))(Keep.right)
-    .toMat(BroadcastHub.sink(1))(Keep.both)
 
-
-  //соединяем бродкастинг на клиенты с приёмом пакетов из серверных соединений
+  //теперь приём пакетов из серверных соединений
+  //соединяем с бродкастингом на клиенты
   val ConnectedServerClientGraph = MergeHub
     .source[ByteString](perProducerBufferSize = 1)
-    .toMat(RawDataToCandlesBroadcastSink)(Keep.both)
+    //пропускаем данные с сервера через конвертер в свечи
+    .via(rawDataToCandlesBroadcastSink)
+    //бродкастим свечи за последние 10 минут
+    .alsoToMat(Candlestick
+      .tenMinBufferOfOneMin
+      .toMat(BroadcastHub.sink(1))(Keep.right))(Keep.both)
+    //бродкастим свечи по одной
+    .toMat(BroadcastHub.sink(1))(Keep.both)
 
-  val (mergeSink, (broadcastBufferSource, broadcastSource)) = ConnectedServerClientGraph.run()
+  val ((mergeSink, broadcastBufferSource), broadcastSource) = ConnectedServerClientGraph.run()
 
   // Работа серверными соединениями
   Source
