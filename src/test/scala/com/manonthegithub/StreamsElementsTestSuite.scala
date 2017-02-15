@@ -29,6 +29,7 @@ class StreamsElementsTestSuite extends TestKit(ActorSystem("tester")) with WordS
         .repeat(Candlestick.createOneMin(DealInfo(Instant.now(), "TC", 100.5, 100)))
         .delay(delay)
         .via(Candlestick.tenMinBufferOfOneMin)
+        .mapConcat[StreamElement](b => b)
         .runWith(TestSink.probe)
         .request(1)
         .expectNext(EndOfBatch)

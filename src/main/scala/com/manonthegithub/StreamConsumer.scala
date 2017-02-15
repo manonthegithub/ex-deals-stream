@@ -66,9 +66,6 @@ object StreamConsumer extends App {
     .alsoToMat(Candlestick
       .tenMinBufferOfOneMin
       .toMat(BroadcastHub.sink(1))(Keep.right))(Keep.right)
-    //конвертируем в байты и бродкастим
-    .map(c => ByteString(c.toJson.compactPrint))
-    .intersperse(ByteString("\n"))
     .toMat(BroadcastHub.sink(1))(Keep.both)
 
 
@@ -100,12 +97,10 @@ object StreamConsumer extends App {
   //источник пачек свечей за последние 10 минут
   val BufferRawSource = broadcastBufferSource
     .log("TenBatch")
-    .dropWhile(_ != EndOfBatch)
     .drop(1)
+    .mapConcat[StreamElement](b => b)
     .takeWhile(_.isInstanceOf[Candlestick])
     .map(_.asInstanceOf[Candlestick])
-    .map(c => ByteString(c.toJson.compactPrint))
-    .intersperse(ByteString("\n"))
 
   // Работа с клиентскими соединениями
   Tcp()
@@ -115,6 +110,8 @@ object StreamConsumer extends App {
     // сначала за последние 10 минут потом остальные
     .map(broadcastSource
       .prepend(BufferRawSource)
+      .map(c => ByteString(c.toJson.compactPrint))
+      .intersperse(ByteString("\n"))
       .via(_)
       .runWith(Sink.ignore)
     ).runWith(Sink.ignore)

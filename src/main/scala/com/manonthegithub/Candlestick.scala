@@ -27,9 +27,8 @@ object Candlestick {
     .fromGraph(new CandleAggregatorFlow(Candlestick.createOneMin, CandlestickOneMinute.Interval, CandlestickOneMinute.CountdownStartMilli))
     .log("Candle")
 
-  def tenMinBufferOfOneMin: Flow[Candlestick, StreamElement, NotUsed] = Flow
-    .fromGraph(new CandlesBuffer(10))
-    .mapConcat[StreamElement](b => b)
+  def tenMinBufferOfOneMin: Flow[Candlestick, immutable.Iterable[StreamElement], NotUsed] = Flow.fromGraph(new CandlesBuffer(10))
+
 
   def intervalStartForTimestamp(timestamp: Instant, interval: FiniteDuration, startOfCountdown: Long): Instant = {
     val millisMultiplier = (timestamp.toEpochMilli - startOfCountdown) / interval.toMillis
