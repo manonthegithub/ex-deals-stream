@@ -8,7 +8,7 @@ To build execute:
 sbt clean assembly
 ```
 
-To run find in **{projectPath}/target/** assembled file
+To run find in **{projectPath}/target/** assembled **jar** file
 and execute:
 ```
 java -jar ex-deals-stream-assembly-1.0.jar
