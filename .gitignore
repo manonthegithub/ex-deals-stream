@@ -1,3 +1,5 @@
 .idea
 **/target
-project
+project/*
+!project/assembly.sbt
+.DS_Store

@@ -4,10 +4,12 @@ import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 import java.time._
 
+import akka.Done
 import akka.actor.ActorSystem
 import akka.stream._
 import akka.stream.scaladsl._
 import akka.util.ByteString
+import com.typesafe.config.ConfigFactory
 
 /**
   * Created by Kirill on 10/02/2017.
@@ -31,9 +33,16 @@ object StreamConsumer extends App {
   implicit val mat = ActorMaterializer(MatSettings)
   implicit val ec = system.dispatcher
 
-  val Host = "localhost"
-  val PortToConnect = 15555
-  val PortToBind = 15556
+  val conf = ConfigFactory
+    .load()
+    .getConfig("eds")
+
+  val Host = conf.getString("remote.host")
+  val PortToConnect = conf.getInt("remote.port")
+  val PortToBind = conf.getInt("bind.port")
+  println(s"Using remote server hostname: $Host")
+  println(s"Using remote server port: $PortToConnect")
+  println(s"Binding to port: $PortToBind")
 
   //Используем MergeHub и BroadcastHub для того,
   //чтобы отвязать серверные коннекты от клиентских,
@@ -45,32 +54,31 @@ object StreamConsumer extends App {
   //конвертируем данные из битовых строк в данные по сделке, аггрегируем в свечи и бродкастим на клиенты
   import JsonFormats.CandleStickJsonFormat
   import spray.json._
+  import scala.concurrent.duration._
 
-  val RawDataToCandlesBradcastSink = {
-    import scala.concurrent.duration._
+  val RawDataToCandlesBroadcastSink = DealInfo
     //парсинг сырых данных
-    DealInfo
-      .framingConverterFlow
-      //нужно, чтобы синхронизировать время на сервере передающим данные c локальным временем
-      //и гарантированно выдавать последню свечь перед паузой, даже если сервер перестал писать данные
-      .keepAlive(3 seconds, () => Tick)
-      .map(TimestampedElement(_, System.currentTimeMillis()))
-      //аггрегируем в свечи
-      .via(Candlestick.flowOfOneMin)
-      //отдельно бродкастим свечи за последние 10 минут
-      .alsoToMat(Candlestick
-        .tenMinBufferOfOneMin
-        .toMat(BroadcastHub.sink(1))(Keep.right))(Keep.right)
-      //конвертируем в байты и бродкастим
-      .map(c => ByteString(c.toJson.compactPrint))
-      .intersperse(ByteString("\n"))
-      .toMat(BroadcastHub.sink(1))(Keep.both)
-  }
+    .framingConverterFlow
+    //нужно, чтобы синхронизировать время на сервере передающим данные c локальным временем
+    //и гарантированно выдавать последню свечь перед паузой, даже если сервер перестал писать данные
+    .keepAlive(3 seconds, () => Tick)
+    .map(TimestampedElement(_, System.currentTimeMillis()))
+    //аггрегируем в свечи
+    .via(Candlestick.flowOfOneMin)
+    //отдельно бродкастим свечи за последние 10 минут
+    .alsoToMat(Candlestick
+      .tenMinBufferOfOneMin
+      .toMat(BroadcastHub.sink(1))(Keep.right))(Keep.right)
+    //конвертируем в байты и бродкастим
+    .map(c => ByteString(c.toJson.compactPrint))
+    .intersperse(ByteString("\n"))
+    .toMat(BroadcastHub.sink(1))(Keep.both)
+
 
   //соединяем бродкастинг на клиенты с приёмом пакетов из серверных соединений
   val ConnectedServerClientGraph = MergeHub
     .source[ByteString](perProducerBufferSize = 1)
-    .toMat(RawDataToCandlesBradcastSink)(Keep.both)
+    .toMat(RawDataToCandlesBroadcastSink)(Keep.both)
 
   val (mergeSink, (broadcastBufferSource, broadcastSource)) = ConnectedServerClientGraph.run()
 
@@ -86,7 +94,11 @@ object StreamConsumer extends App {
         // использовать мёрдж хаб для коннектов к серверу с данными
         .toMat(mergeSink)(Keep.left)
         .run()
-    ).runWith(Sink.ignore)
+        .recover{ case _ => Done }
+    )
+    //при разрыве соединения пытаемся восстановить его через 5 секунд
+    .delay(5 seconds, DelayOverflowStrategy.dropNew)
+    .runWith(Sink.ignore)
 
   //источник пачек свечей за последние 10 минут
   val BufferRawSource = broadcastBufferSource
@@ -110,6 +122,7 @@ object StreamConsumer extends App {
       .runWith(Sink.ignore)
     ).runWith(Sink.ignore)
 
+  println("Application started.")
 }
 
 case class TimestampedElement(element: StreamElement, timestampMillis: Long)

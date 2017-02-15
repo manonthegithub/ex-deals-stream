@@ -121,10 +121,6 @@ object Candlestick {
       private val candlesticks = mutable.Map.empty[String, Candlestick]
       private val outputQueue = mutable.Queue.empty[Candlestick]
 
-      override def preStart(): Unit = {
-        pull(in)
-      }
-
       setHandler(in, new InHandler {
         @scala.throws[Exception](classOf[Exception])
         override def onPush() = {
