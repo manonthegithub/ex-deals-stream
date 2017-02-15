@@ -14,4 +14,13 @@ libraryDependencies ++= Seq(
   "org.scalatest" %% "scalatest" % "3.0.0" % "test"
 )
 
+
+assemblyMergeStrategy in assembly := {
+  case "application.conf" => MergeStrategy.concat
+  case "reference.conf" => MergeStrategy.concat
+  case x =>
+    val oldStrategy = (assemblyMergeStrategy in assembly).value
+    oldStrategy(x)
+}
+
 mainClass in assembly := Some("com.manonthegithub.StreamConsumer")

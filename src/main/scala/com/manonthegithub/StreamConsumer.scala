@@ -40,9 +40,6 @@ object StreamConsumer extends App {
   val Host = conf.getString("remote.host")
   val PortToConnect = conf.getInt("remote.port")
   val PortToBind = conf.getInt("bind.port")
-  println(s"Using remote server hostname: $Host")
-  println(s"Using remote server port: $PortToConnect")
-  println(s"Binding to port: $PortToBind")
 
   //Используем MergeHub и BroadcastHub для того,
   //чтобы отвязать серверные коннекты от клиентских,
@@ -122,7 +119,6 @@ object StreamConsumer extends App {
       .runWith(Sink.ignore)
     ).runWith(Sink.ignore)
 
-  println("Application started.")
 }
 
 case class TimestampedElement(element: StreamElement, timestampMillis: Long)
