@@ -1,7 +1,7 @@
 # ex-deals-stream
 Streaming proxy aggregator example
 
-Reads events about stock deals from server via tcp and broadcasts aggregated candlesticks events to clients.
+Reads events about stock deals from server via tcp, counts candlesticks and broadcasts them to clients.
 
 To build execute:
 ```
