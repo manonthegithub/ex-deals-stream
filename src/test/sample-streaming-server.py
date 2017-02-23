@@ -8,7 +8,7 @@ from datetime import datetime
 import random
 
 TICKERS = ["AAPL", "GOOG", "MSFT", "SPY"]
-PORT = 5555
+PORT = 15555
 
 def timestamp_millis(timestamp):
     return int((timestamp - datetime.utcfromtimestamp(0)).total_seconds() * 1000.0)
