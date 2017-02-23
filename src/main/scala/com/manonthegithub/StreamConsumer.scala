@@ -53,7 +53,7 @@ object StreamConsumer extends App {
   import scala.concurrent.duration._
 
   //конвертируем данных из битовых строк в данные по сделке, далее, аггрегируем в свечи
-  val rawDataToCandlesBroadcastSink = DealInfo
+  val RawDataToCandlesBroadcastFLow = DealInfo
     //парсинг сырых данных
     .framingConverterFlow
     //нужно, чтобы синхронизировать время на сервере, передающем данные, c локальным временем,
@@ -68,7 +68,7 @@ object StreamConsumer extends App {
   val ConnectedServerClientGraph = MergeHub
     .source[ByteString](perProducerBufferSize = 1)
     //пропускаем данные с сервера через конвертер в свечи
-    .via(rawDataToCandlesBroadcastSink)
+    .via(RawDataToCandlesBroadcastFLow)
     //бродкастим свечи за последние 10 минут
     .alsoToMat(Candlestick
       .tenMinBufferOfOneMin
