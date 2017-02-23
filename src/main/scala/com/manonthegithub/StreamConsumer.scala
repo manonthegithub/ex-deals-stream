@@ -56,7 +56,7 @@ object StreamConsumer extends App {
   val rawDataToCandlesBroadcastSink = DealInfo
     //парсинг сырых данных
     .framingConverterFlow
-    //нужно, чтобы синхронизировать время на сервере передающим данные c локальным временем
+    //нужно, чтобы синхронизировать время на сервере, передающем данные, c локальным временем,
     //и гарантированно выдавать последню свечь перед паузой, даже если сервер перестал писать данные
     .keepAlive(3 seconds, () => Tick)
     .map(TimestampedElement(_, System.currentTimeMillis()))
