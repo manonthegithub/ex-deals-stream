@@ -30,3 +30,19 @@ eds {
   bind.port = 15556
 }
 ```
+
+## To test:
+
+1. Run sample streaming server than can be found in **{projectPath}/src/test/**:
+  ```
+  python sample-streaming-server.py
+  ```
+  Server accepts connections on port 15555 and sends sample data
+  
+2. Run application as described above
+
+3. Connect to port 15556 and see coming data. To listen to port you can use nc:
+  ```
+  nc localhost 15556
+  ```
+  Multiple connections are supported, data is broadcast to each of them.
