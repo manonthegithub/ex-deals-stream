@@ -100,11 +100,11 @@ object Candlestick {
   }
 
   /**
-    * Слушает с события с сервера и конвретирует их в свечи
+    * Listens to events from server and converts them to candlesticks
     *
-    * @param factory              фабрика генерации свечи из события
-    * @param interval             период свечей
-    * @param countdownStartMillis точка отсчёта для периодов свечей
+    * @param factory              factory generating candlesticks from event
+    * @param interval             interval of candlesticks
+    * @param countdownStartMillis countdown for candlestick intevals
     */
   class CandleAggregatorFlow(factory: (DealInfo) => Candlestick, interval: FiniteDuration, countdownStartMillis: Long)
     extends GraphStage[FlowShape[TimestampedElement, Candlestick]] {
