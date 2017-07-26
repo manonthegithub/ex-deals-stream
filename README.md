@@ -1,4 +1,4 @@
-# Streaming tcp-proxy server example on Akka Streams.
+# Streaming tcp-proxy server example using Akka Streams.
 
 Connects to tcp-server (server connection is automatically restored on any kind of failure) and inifinitely reads events from it about stock deals, counts candlesticks ([wiki about candlesticks](https://en.wikipedia.org/wiki/Candlestick_chart)) from those events and broadcasts them to arbitrary number of clients that can connect to this proxy and consume candlesticks in realtime.
 
