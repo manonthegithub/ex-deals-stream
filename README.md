@@ -1,7 +1,6 @@
-# ex-deals-stream
-Streaming proxy aggregator example
+# Streaming tcp-proxy server example on Akka Streams.
 
-Reads events about stock deals from server via tcp, counts candlesticks and broadcasts them to clients.
+Connects to tcp-server (server connection is automatically restored on any kind of failure) and inifinitely reads events from it about stock deals, counts candlesticks ([wiki about candlesticks](https://en.wikipedia.org/wiki/Candlestick_chart)) from those events and broadcasts them to arbitrary number of clients that can connect to this proxy and consume candlesticks in realtime.
 
 Project was built and run with **java 8** and **sbt 0.13.x**, proper working with other versions of java and sbt is not guaranteed.
 
