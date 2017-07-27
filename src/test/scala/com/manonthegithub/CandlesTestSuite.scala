@@ -3,11 +3,7 @@
  */
 package com.manonthegithub
 
-import java.time.Instant
-
 import org.scalatest.{Matchers, WordSpec}
-
-import scala.util.Random
 
 class CandlesTestSuite extends WordSpec with Matchers{
 
