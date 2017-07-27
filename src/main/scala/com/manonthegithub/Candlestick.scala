@@ -37,9 +37,9 @@ object Candlestick {
   }
 
   /**
-    * Буфер хранит несколько последних свечей
+   * Buffer for several latest candlesticks
     *
-    * @param sizeIntervals количество свечей, которые нужно хранить
+   * @param sizeIntervals actual number of elements to store in the buffer
     */
   class CandlesBuffer(sizeIntervals: Int) extends GraphStage[FlowShape[Candlestick, immutable.Iterable[StreamElement]]] {
 
@@ -49,7 +49,7 @@ object Candlestick {
     @scala.throws[Exception](classOf[Exception])
     override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new TimerGraphStageLogic(shape) {
 
-      private case class DequeAfterIntervalEnds(timestamp: Instant)
+      private case object DequeAfterIntervalEnds
 
       private var buffer = immutable.Queue.empty[Candlestick]
 
@@ -63,10 +63,9 @@ object Candlestick {
           val elem = grab(in)
           val sameTimestampWithPrevious = if (buffer.nonEmpty) elem.timestamp == buffer.last.timestamp else false
           buffer :+= elem
-          // при удалении полагаться на поток свечей нельзя,
-          // так как он может прерываться в случае потери соединения с сервером
+          // we should schedule buffer cleanup in case server has no events
           if (!sameTimestampWithPrevious) {
-            scheduleOnce(DequeAfterIntervalEnds(elem.timestamp), elem.interval * sizeIntervals)
+            scheduleOnce(DequeAfterIntervalEnds, elem.interval * sizeIntervals)
           }
           pull(in)
         }
@@ -86,7 +85,7 @@ object Candlestick {
       }
 
       override def onTimer(timerKey: Any): Unit = timerKey match {
-        case DequeAfterIntervalEnds(_) =>
+        case DequeAfterIntervalEnds =>
           if (buffer.nonEmpty) {
             dequeFirstTimestampCandles()
           }
@@ -212,7 +211,7 @@ trait Candlestick extends StreamElement {
 
   def merge(data: DealInfo): Candlestick
 
-  //время начала интервала свечи
+  //start of candlestick's interval
   final def timestamp: Instant = intervalStartForTimestamp(openTimestamp, interval, startingPointForCountdownMillis)
 
   def interval: FiniteDuration
@@ -228,9 +227,9 @@ object CandlestickOneMinute {
   val CountdownStartMilli: Long = 0
 }
 
-/**
-  * Чтобы отличать свечи с разным периодом объявляем отдельный тип для каждого
-  */
+//candlesticks can be for different intervals,
+//each implementation represents candlesticks of different intervals
+//this is for better safety, not to occasionally combine different types of candlesticks
 case class CandlestickOneMinute(ticker: String,
                                 openTimestamp: Instant,
                                 closeTimestamp: Instant,

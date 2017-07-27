@@ -17,10 +17,8 @@ import com.typesafe.config.ConfigFactory
 object StreamConsumer extends App {
 
   /*
-     Несмотря на то, что в Java/Scala все примитивные числовые типы - знаковые,
-     в рамках тестового задания не будем делать лишние конвертации,
-     считаем, что везде при конвертации в приходящих значениях
-     старший бит будет всегда 0
+     For simplicity, there is an assumption that highest bit is always 0,
+     even though all primitive numeric types in Java/Scala are signed.
   */
 
   implicit val system = ActorSystem("stock-exchange")
@@ -41,62 +39,51 @@ object StreamConsumer extends App {
   val PortToConnect = conf.getInt("remote.port")
   val PortToBind = conf.getInt("bind.port")
 
-  //Используем MergeHub и BroadcastHub для того,
-  //чтобы отвязать серверные коннекты от клиентских,
-  //т.е. если пропадает связь с сервером, то клиенты не отваливаются,
-  //а ждут пока она восстановится,
-  //в свою очередь клиенты могут отвалиться и добавляться,
-  //что не влияет на серверный коннект
-
+  //Using MergeHub and BroadcastHub to isolate server connections from client ones,
+  //i.e. server connection failure won't affect client connections and vice versa.
   import JsonFormats.CandleStickJsonFormat
   import spray.json._
   import scala.concurrent.duration._
 
-  //конвертируем данных из битовых строк в данные по сделке, далее, аггрегируем в свечи
+  //parse raw byte messages and combine them to candlesticks
   val RawDataToCandlesBroadcastFLow = DealInfo
-    //парсинг сырых данных
     .framingConverterFlow
-    //нужно, чтобы синхронизировать время на сервере, передающем данные, c локальным временем,
-    //и гарантированно выдавать последню свечь перед паузой, даже если сервер перестал писать данные
+    //we need to sync local time with server time and keep alive even if server stopped writing
     .keepAlive(3 seconds, () => Tick)
     .map(TimestampedElement(_, System.currentTimeMillis()))
-    //аггрегируем в свечи
     .via(Candlestick.flowOfOneMin)
 
-  //теперь приём пакетов из серверных соединений
-  //соединяем с бродкастингом на клиенты
+  //combine consumption of packets from server with broadcasting to clients
   val ConnectedServerClientGraph = MergeHub
     .source[ByteString](perProducerBufferSize = 1)
-    //пропускаем данные с сервера через конвертер в свечи
     .via(RawDataToCandlesBroadcastFLow)
-    //бродкастим свечи за последние 10 минут
+    //first broadcast candlesticks from buffer
     .alsoToMat(Candlestick
       .tenMinBufferOfOneMin
       .toMat(BroadcastHub.sink(1))(Keep.right))(Keep.both)
-    //бродкастим свечи по одной
+    //then broadcast candlesticks in real time
     .toMat(BroadcastHub.sink(1))(Keep.both)
 
   val ((mergeSink, broadcastBufferSource), broadcastSource) = ConnectedServerClientGraph.run()
 
-  // Работа серверными соединениями
+  // Connections with server
   Source
     .repeat(Tcp().outgoingConnection(Host, PortToConnect))
-    // одно одновременное подключение
+    //we have only one simultaneous connection with server
     .mapAsync(1)(
       Source
         .single(ByteString.empty)
         .via(_)
         .watchTermination()(Keep.right)
-        // использовать мёрдж хаб для коннектов к серверу с данными
+        // Isolate server connections with MergeHub
         .toMat(mergeSink)(Keep.left)
         .run()
         .recover{ case _ => Done }
     )
-    //при разрыве соединения пытаемся восстановить его через 5 секунд
+    //retry connection every 5 seconds on failure
     .delay(5 seconds, DelayOverflowStrategy.dropNew)
     .runWith(Sink.ignore)
 
-  //источник пачек свечей за последние 10 минут
   val BufferRawSource = broadcastBufferSource
     .log("TenBatch")
     .drop(1)
@@ -104,12 +91,11 @@ object StreamConsumer extends App {
     .takeWhile(_.isInstanceOf[Candlestick])
     .map(_.asInstanceOf[Candlestick])
 
-  // Работа с клиентскими соединениями
+  // Connections with clients
   Tcp()
     .bind(Host, PortToBind)
     .map(_.flow)
-    // используем бродкаст для передачи свечей на клиенты,
-    // сначала за последние 10 минут потом остальные
+    // Isolate client connections with BroadcastHub
     .map(broadcastSource
       .prepend(BufferRawSource)
       .map(c => ByteString(c.toJson.compactPrint))
@@ -128,7 +114,7 @@ case object EndOfBatch extends StreamElement
 
 trait StreamElement
 
-//объектное представление сообщений с сервера
+//model of stock events from server
 case class DealInfo(timestamp: Instant, ticker: String, price: Double, size: Int) extends StreamElement
 
 object DealInfo {
@@ -144,7 +130,7 @@ object DealInfo {
   private val TickerFieldLenOffset = FrameFieldLengthInBytes + TimestampFieldLen
   private val TickerOffset = FrameFieldLengthInBytes + TimestampFieldLen + TickerLenFieldLen
 
-  //бьём на фреймы, парсим каждый  фрейм
+  //raw bytes to DealInfo objects
   def framingConverterFlow = Framing
     .lengthField(
       fieldLength = DealInfo.FrameFieldLengthInBytes,
